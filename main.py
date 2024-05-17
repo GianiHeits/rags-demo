@@ -10,6 +10,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
+from src.youtube_source import get_transcript_from_url
+
 from typing import List
 from PIL import Image
 
@@ -42,8 +44,16 @@ class RAG:
         return answer
 
 
-    def get_rag_chain(self, vectorstore):
-        retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 5})
+    def query_youtube_video(self, video_url: str, query: str) -> str:
+        vectorstore = self._get_vectorstore_from_youtube(video_url)
+        rag_chain = self.get_rag_chain(vectorstore, 15)
+        answer = rag_chain.invoke(query)
+        vectorstore.delete_collection()
+        return answer
+
+
+    def get_rag_chain(self, vectorstore, top_k=5):
+        retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": top_k})
         prompt = hub.pull("rlm/rag-prompt")
 
         rag_chain = (
@@ -98,10 +108,20 @@ class RAG:
         return vectorstore
 
 
-    def _get_vectorstore_from_videos(self, videos_path_list, use_transcription=False):
+    def _get_vectorstore_from_youtube(self, video_url):
         # Use this to ask GPT about content in videos
-        pass
-    
+        transcript = get_transcript_from_url(video_url)
+        
+        documents = []
+        for item in transcript:
+            metadata = item.copy()
+            page_content = metadata.pop('text', None)
+            doc = Document(page_content=page_content, metadata=metadata)
+            documents.append(doc)
+        
+        vectorstore = Chroma.from_documents(documents=documents, embedding=self.encoder)
+        return vectorstore
+
 
     def _extract_contest_from_images(self, raw_images: List, model_type="Salesforce/blip-image-captioning-large"):
         from transformers import BlipProcessor, BlipForConditionalGeneration
@@ -132,16 +152,26 @@ if __name__ == "__main__":
 
     rag = RAG()
 
-    # This is how you find out what's in a link
-    links = ["https://heits.digital/articles/gpt3-overview"]
-    query = "Is this a good article for someone that wants to start learning Machine Learning?"
-    answer = rag.query_links(links, query)
+    # # This is how you find out what's in a link
+    # links = ["https://rust-exercises.com/"]
+    # query = "Is this a good article for someone that wants to start learning Machine Learning?"
+    # answer = rag.query_links(links, query)
 
-    print(answer)
+    # print(answer)
 
-    # This is how you find out what's in a image
-    image_paths = [str(path) for path in Path("data/images/").glob("*")]
-    query = "Are there any pokemon cards? And if so, describe them to me and give me the name of the file."
-    answer = rag.query_images(image_paths, query)
+    # # This is how you find out what's in a image
+    # image_paths = [str(path) for path in Path("data/images/").glob("*")]
+    # query = "Are there any digimon cards? And if so, describe them to me and give me the name of the file."
+    # answer = rag.query_images(image_paths, query)
+
+    # print(answer)
+
+    # video_url = "https://www.youtube.com/watch?v=lW7Mxj8KUJE&ab_channel=LinusTechTips"
+    # query = "Why is google chrome slow based on the transcript?"
+    # answer = rag.query_youtube_video(video_url, query)
+    
+    video_url = "https://www.youtube.com/watch?v=JDEc9Z_LI9I&ab_channel=SomeOrdinaryGamers"
+    query = "Why will the speaker won't buy EA games anymore?"
+    answer = rag.query_youtube_video(video_url, query)
 
     print(answer)

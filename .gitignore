@@ -1,7 +1,10 @@
 *.DS_Store
-*.webm
+__pycache__
+.ipynb_checkpoints/
 
 .venv/
 
 .env
 test.py
+
+*.webm
