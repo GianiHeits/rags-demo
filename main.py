@@ -12,6 +12,8 @@ from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain.output_parsers import PydanticOutputParser
 
+from transformers import BlipProcessor, BlipForConditionalGeneration, BlipForQuestionAnswering
+
 from src.youtube_source import get_transcript_from_url
 
 from pydantic import BaseModel
@@ -32,6 +34,14 @@ class RAG:
     def __init__(self):
         self.encoder = OpenAIEmbeddings()
         self.llm = ChatOpenAI(model="gpt-3.5-turbo-0125")
+        
+        self.blip_model_type = "Salesforce/blip-image-captioning-large"
+        self.blip_processor = BlipProcessor.from_pretrained(self.blip_model_type)
+        self.blip_model = BlipForConditionalGeneration.from_pretrained(self.blip_model_type)
+        
+        self.blip_qna_model_type = "Salesforce/blip-vqa-base"
+        self.blip_qna_processor = BlipProcessor.from_pretrained(self.blip_qna_model_type)
+        self.blip_qna_model = BlipForQuestionAnswering.from_pretrained(self.blip_qna_model_type)
 
 
     def query_links(self, links: List[str], query: str) -> str:
@@ -141,38 +151,28 @@ class RAG:
         chain = prompt | self.llm | JsonOutputParser()
         return chain.invoke(query)
 
-    def _extract_generic_image_info(self, raw_images: List, model_type="Salesforce/blip-image-captioning-large"):
-        from transformers import BlipProcessor, BlipForConditionalGeneration
-
+    def _extract_generic_image_info(self, raw_images: List):
         descriptions = []
-        
-        processor = BlipProcessor.from_pretrained(model_type)
-        model = BlipForConditionalGeneration.from_pretrained(model_type)
 
         # conditional image captioning
         for image in raw_images:
             conditioning_text = ""
-            inputs = processor(image, conditioning_text, return_tensors="pt")
-            out = model.generate(**inputs)
-            description = processor.decode(out[0], skip_special_tokens=True)
+            inputs = self.blip_processor(image, conditioning_text, return_tensors="pt")
+            out = self.blip_model.generate(**inputs)
+            description = self.blip_processor.decode(out[0], skip_special_tokens=True)
             print(description)
             descriptions.append(description)
         
         return descriptions
 
-    def _extract_image_info_based_on_questions(self, raw_images: List, question="", model_type="Salesforce/blip-vqa-base"):
-        from transformers import BlipProcessor, BlipForQuestionAnswering
-
+    def _extract_image_info_based_on_questions(self, raw_images: List, question=""):
         descriptions = []
-        
-        processor = BlipProcessor.from_pretrained(model_type)
-        model = BlipForQuestionAnswering.from_pretrained(model_type)
 
         # conditional image captioning
         for image in raw_images:
-            inputs = processor(image, question, return_tensors="pt")
-            out = model.generate(**inputs)
-            description = processor.decode(out[0], skip_special_tokens=True)
+            inputs = self.blip_qna_processor(image, question, return_tensors="pt")
+            out = self.blip_qna_model.generate(**inputs)
+            description = self.blip_qna_processor.decode(out[0], skip_special_tokens=True)
             print(description)
             descriptions.append(description)
         
