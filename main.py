@@ -6,14 +6,21 @@ from langchain import hub
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_chroma import Chroma
 from langchain.docstore.document import Document
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langchain.output_parsers import PydanticOutputParser
 
 from src.youtube_source import get_transcript_from_url
 
+from pydantic import BaseModel
 from typing import List
 from PIL import Image
+
+
+class Questions(BaseModel):
+    questions: List[str]
 
 
 def update_env_vars(env_file_path: str=None):
@@ -37,7 +44,7 @@ class RAG:
 
     def query_images(self, image_path_list: List[str], query: str) -> str:
         raw_images = [Image.open(img_path).convert('RGB') for img_path in image_path_list]
-        vectorstore = self._get_vectorstore_from_images(raw_images, image_path_list)
+        vectorstore = self._get_vectorstore_from_images(raw_images, image_path_list, query)
         rag_chain = self.get_rag_chain(vectorstore)
         answer = rag_chain.invoke(query)
         vectorstore.delete_collection()
@@ -92,17 +99,18 @@ class RAG:
         return vectorstore
     
 
-    def _get_vectorstore_from_images(self, raw_images_list: List[Image.Image], raw_images_paths: List[str]=None):
+    def _get_vectorstore_from_images(self, raw_images_list: List[Image.Image], raw_images_paths: List[str]=None, query: str=""):
         # Use this to ask GPT about content in images
-        descriptions = self._extract_contest_from_images(raw_images_list)
+        descriptions = self._extract_generic_image_info(raw_images_list)
+        descriptions_questions = self._extract_image_info_based_on_questions(raw_images_list, question=query)
 
         documents = []
-        for i, description in enumerate(descriptions):
+        for i, [desc1, desc2] in enumerate(zip(descriptions, descriptions_questions)):
             source = raw_images_paths[i] if raw_images_paths != None else f"image_{i}"
-            description = "{" + f"source: '{source}', description: '{description}'" + "}"
-            print(description)
+            description = "{" + f"file_name: '{source}', description_generic: '{desc1}', description_specific: '{desc2}'" + "}"
             doc = Document(page_content=description, metadata={"source": source})
             documents.append(doc)
+        print(documents)
         
         vectorstore = Chroma.from_documents(documents=documents, embedding=self.encoder)
         return vectorstore
@@ -122,8 +130,18 @@ class RAG:
         vectorstore = Chroma.from_documents(documents=documents, embedding=self.encoder)
         return vectorstore
 
+    def _get_questions_from_prompt(self, query):
+        parser = PydanticOutputParser(pydantic_object=Questions)
+        formatting = parser.get_format_instructions()
 
-    def _extract_contest_from_images(self, raw_images: List, model_type="Salesforce/blip-image-captioning-large"):
+        prompt = ChatPromptTemplate.from_template(
+            "Pretend you are Sherlock Holmes and you only ask as few questions as possbile to unravel a mistery. What would standalone question would ask about a image to answer the following mistery: {query}. {format_instructions}", 
+            partial_variables={"format_instructions": formatting}
+            )
+        chain = prompt | self.llm | JsonOutputParser()
+        return chain.invoke(query)
+
+    def _extract_generic_image_info(self, raw_images: List, model_type="Salesforce/blip-image-captioning-large"):
         from transformers import BlipProcessor, BlipForConditionalGeneration
 
         descriptions = []
@@ -137,6 +155,25 @@ class RAG:
             inputs = processor(image, conditioning_text, return_tensors="pt")
             out = model.generate(**inputs)
             description = processor.decode(out[0], skip_special_tokens=True)
+            print(description)
+            descriptions.append(description)
+        
+        return descriptions
+
+    def _extract_image_info_based_on_questions(self, raw_images: List, question="", model_type="Salesforce/blip-vqa-base"):
+        from transformers import BlipProcessor, BlipForQuestionAnswering
+
+        descriptions = []
+        
+        processor = BlipProcessor.from_pretrained(model_type)
+        model = BlipForQuestionAnswering.from_pretrained(model_type)
+
+        # conditional image captioning
+        for image in raw_images:
+            inputs = processor(image, question, return_tensors="pt")
+            out = model.generate(**inputs)
+            description = processor.decode(out[0], skip_special_tokens=True)
+            print(description)
             descriptions.append(description)
         
         return descriptions
@@ -159,19 +196,19 @@ if __name__ == "__main__":
 
     # print(answer)
 
-    # # This is how you find out what's in a image
-    # image_paths = [str(path) for path in Path("data/images/").glob("*")]
-    # query = "Are there any digimon cards? And if so, describe them to me and give me the name of the file."
-    # answer = rag.query_images(image_paths, query)
-
-    # print(answer)
-
     # video_url = "https://www.youtube.com/watch?v=lW7Mxj8KUJE&ab_channel=LinusTechTips"
     # query = "Why is google chrome slow based on the transcript?"
     # answer = rag.query_youtube_video(video_url, query)
     
-    video_url = "https://www.youtube.com/watch?v=JDEc9Z_LI9I&ab_channel=SomeOrdinaryGamers"
-    query = "Why will the speaker won't buy EA games anymore?"
-    answer = rag.query_youtube_video(video_url, query)
+    # video_url = "https://www.youtube.com/watch?v=JDEc9Z_LI9I&ab_channel=SomeOrdinaryGamers"
+    # query = "Why will the speaker won't buy EA games anymore?"
+    # answer = rag.query_youtube_video(video_url, query)
+
+    # print(answer)
+
+    # This is how you find out what's in a image
+    image_paths = [str(path) for path in Path("data/images/").glob("*")]
+    query = "Are there any pokemon cards? And if so, what colors are the pokemons?."
+    answer = rag.query_images(image_paths, query)
 
     print(answer)
