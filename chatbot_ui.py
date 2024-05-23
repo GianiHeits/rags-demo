@@ -6,7 +6,8 @@ import gradio as gr
 from main import RAG, update_env_vars
 
 
-rag = RAG()
+rag = RAG(streaming=False)
+rag.prepare_vectorstores_for_demo()
 
 def handler(message, history, task_type, additional_info):
     match task_type:
@@ -19,10 +20,11 @@ def handler(message, history, task_type, additional_info):
             response = rag.query_images(image_paths, message)
         case _:
             response = f"I currently do not support '{task_type}' functionality"
-
-    for i in range(len(response)):
-        time.sleep(0.01)
-        yield response[: i + 1]
+    
+    partial_message = ""
+    for chunk in response:
+        partial_message += chunk
+        yield partial_message
 
 demo = gr.ChatInterface(
     handler,
